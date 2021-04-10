@@ -1,0 +1,1 @@
+from task_allocation.random_allocation import RandomAllocation

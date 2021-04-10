@@ -1,9 +1,15 @@
-from typing import Tuple
+import cProfile
+import sys
+from typing import Tuple, Optional
 from mesa import Model, Agent
 from mesa.time import SimultaneousActivation
-from mesa.space import ContinuousSpace
+from mesa.space import ContinuousSpace, Grid
 from mesa.datacollection import DataCollector
 import numpy as np
+from scipy.signal import convolve2d
+import task_allocation
+from path_planning.CBS import cbs
+import path_planning.Grid as path_env
 
 
 def check_collision(pos1, pos2, dist=1):
@@ -13,9 +19,14 @@ def check_collision(pos1, pos2, dist=1):
 
 
 class Car(Agent):
-    def __init__(self, unique_id: int, pos: np.ndarray, model: Model):
+    def __init__(self,
+                 unique_id: int,
+                 pos: np.ndarray,
+                 # grid_pos: np.ndarray,
+                 model: Model):
         super().__init__(unique_id, model)
         self.pos = pos
+        # self.grid_pos = grid_pos
         self.speed = 0.1
         self.curr_load = 0
         self.max_load = 1
@@ -30,20 +41,27 @@ class Car(Agent):
     def step(self):
         if self.target is None:
             # Assign target
-            self.target = self.model.random.choice(self.model.tasks)
+            self.target = self.model.task_allocator.allocate_jobs(
+                self.model.tasks
+            )
 
-        # Move towards target
-        grad = self.target.pos - self.pos
-        norm = np.linalg.norm(grad)
-        if norm > 1:
-            grad = grad / np.linalg.norm(grad)
-            self.pos += grad * self.speed
+        # # Move towards target
+        # grad = self.target.pos - self.pos
+        # norm = np.linalg.norm(grad)
+        # if norm > 1:
+        #     grad = grad / np.linalg.norm(grad)
+        #     self.pos += grad * self.speed
 
 
 class Truck(Agent):
-    def __init__(self, unique_id: int, pos: np.ndarray, model: Model):
+    def __init__(self,
+                 unique_id: int,
+                 pos: np.ndarray,
+                 # grid_pos: np.ndarray,
+                 model: Model):
         super().__init__(unique_id, model)
         self.pos = pos
+        # self.grid_pos = grid_pos
         self.speed = 0.04
         self.curr_load = 0
         self.max_load = 3
@@ -58,250 +76,204 @@ class Truck(Agent):
     def step(self):
         if self.target is None:
             # Assign target
-            self.target = self.model.random.choice(self.model.tasks)
+            self.target = self.model.task_allocator.allocate_jobs(
+                self.model.tasks
+            )
 
-        # Move towards target
-        grad = self.target.pos - self.pos
-        norm = np.linalg.norm(grad)
-        if norm > 1:
-            grad = grad / np.linalg.norm(grad)
-            self.pos += grad * self.speed
+        else:
+            # Move using pathing
+            pass
+
+        # # Move towards target
+        # grad = self.target.pos - self.pos
+        # norm = np.linalg.norm(grad)
+        # if norm > 1:
+        #     grad = grad / np.linalg.norm(grad)
+        #     self.pos += grad * self.speed
 
 
 class Job(Agent):
-    def __init__(self, unique_id: int, pos: Tuple[int, int], value: int, priority: int, model: Model):
-        super().__init__(unique_id, model)
+    def __init__(
+            self,
+            pos: np.ndarray,
+            # grid_pos: np.ndarray,
+            value: int,
+            priority: int
+    ):
         self.pos = pos
+        # self.grid_pos = grid_pos
         self.value = value
         self.priority = priority
+        self.assigned = []
 
     def do_work(self, work):
         self.value -= work
 
+    def assign(self, agent):
+        self.assigned.append(agent)
+
     def step(self):
-        #  Move towards target
         if self.value == 0:
             self.model.tasks_left -= 1
             self.model.tasks.remove(self)
+            for agent in self.assigned:
+                agent.target = None
 
 
 class Warehouse(Agent):
-    def __init__(self, unique_id: int, pos: Tuple[int, int], model: Model):
-        super().__init__(unique_id, model)
+    def __init__(
+            self,
+            pos: np.ndarray,
+            # grid_pos: np.ndarray,
+    ):
         self.pos = pos
+        # self.grid_pos = grid_pos
 
     def step(self):
         pass
 
+
+class Obstacle(Agent):
+    def __init__(self, pos):
+        self.pos = pos
+        # self.grid_pos = grid_pos
+        # self.size = size
+
+
+def generate_map(obstacle_map):
+    with open(obstacle_map) as f:
+        lines = [line.rstrip() for line in f]
+        lines = lines[4:]
+        lines = [[0 if c == "." else 1 for c in line] for line in lines]
+
+    return np.array(lines, dtype=np.bool)
 
 class DeliveryModel(Model):
     """
     Model class for the Delivery model.
     """
 
-    def __init__(self, space_size=20, jobs=10, agents=5, warehouses=1, split=0.4):
-
+    def __init__(
+            self,
+            space_size=32,
+            jobs=30,
+            agents=1,
+            warehouses=1,
+            split=0.4,
+            use_seed=True,
+            seed: int = 42,
+            obstacle_map: str = "maps/random-32-32-20.map",
+            task_allocation: str = "RandomAllocation"
+    ):
+        if use_seed:
+            self.random.seed(seed)
+        else:
+            self.random.seed(None)
         self.space_size = space_size
         self.tasks = []
-        self.task_left = jobs
+        self.tasks_left = jobs
         self.warehouses = []
+        self.num_agents = agents
 
         self.schedule = SimultaneousActivation(self)
-        self.space = ContinuousSpace(space_size, space_size, torus=False)
+        self.grid = Grid(space_size, space_size, torus=False)
         self.datacollector = DataCollector(
             {"tasks_left": "tasks_left"},
             {"x": lambda a: a.pos[0], "y": lambda a: a.pos[1]},
         )
 
-        # Set up agents
-        for i in range(agents):
-            # Agents have a fixed diameter of 1
-            x = self.random.random() * (self.space.x_max - 1) + 0.5
-            y = self.random.random() * (self.space.y_max - 1) + 0.5
-            pos = np.array([x, y])
+        self.obstacle_matrix = generate_map(obstacle_map)
+        self.obstacles = self.__set_obstacle__()
+        # self.minkowski_grid = self.__calculate_minkowski__()
+        self.__set_up__(agents, warehouses, split)
 
-            while True:
-                # Check if new position collides with other agents
-                has_collision = any(
-                    map(
-                        lambda a: check_collision(a.pos, pos),
-                        self.schedule.agents
-                    )
-                )
+        self.__add_jobs__(min(2 * agents, jobs))
 
-                if not has_collision:
-                    break
-
-                x = self.random.random() * (self.space.x_max - 1) + 0.5
-                y = self.random.random() * (self.space.y_max - 1) + 0.5
-                pos = np.array([x, y])
-
-            if i < split * agents:
-                # Add Truck agent
-                agent = Truck(i, pos, self)
-
-            else:
-                # Add Car agent
-                agent = Car(i, pos, self)
-
-            self.space.place_agent(agent, pos)
-            self.schedule.add(agent)
-
-        # Set up jobs
-        for val in range(jobs):
-            x = self.random.random() * (self.space.x_max - 1.5) + 0.75
-            y = self.random.random() * (self.space.y_max - 1.5) + 0.75
-            pos = np.array([x, y])
-
-            while True:
-                # Check if new position collides with other agents
-                has_collision = any(
-                    map(
-                        lambda a: check_collision(a.pos, pos, self.space_size/20),
-                        self.tasks
-                    )
-                )
-
-                if not has_collision:
-                    break
-
-                x = self.random.random() * (self.space.x_max - 1) + 0.5
-                y = self.random.random() * (self.space.y_max - 1) + 0.5
-                pos = np.array([x, y])
-
-            job = Job(agents + val, pos, self.random.randint(1, 9), self.random.randint(1, 3), self)
-            self.tasks.append(job)
-            self.space.place_agent(job, pos)
-            self.schedule.add(job)
-
-        # Set up warehouses
-        for w in range(warehouses):
-            # Agents have a fixed diameter of 1
-            x = self.random.random() * (self.space.x_max - 1) + 0.5
-            y = self.random.random() * (self.space.y_max - 1) + 0.5
-            pos = np.array([x, y])
-
-            while True:
-                # Check if new position collides with other agents
-                has_collision = any(
-                    map(
-                        lambda a: check_collision(a.pos, pos, self.space_size/100),
-                        self.warehouses
-                    )
-                )
-
-                has_collision = has_collision or any(
-                    map(
-                        lambda a: check_collision(a.pos, pos, self.space_size/20),
-                        self.tasks
-                    )
-                )
-
-                if not has_collision:
-                    break
-
-                x = self.random.random() * (self.space.x_max - 1) + 0.5
-                y = self.random.random() * (self.space.y_max - 1) + 0.5
-                pos = np.array([x, y])
-
-            warehouse = Warehouse(agents + jobs + w, pos, self)
-            self.warehouses.append(warehouse)
-            self.space.place_agent(warehouse, pos)
-            self.schedule.add(warehouse)
+        self.task_allocator = getattr(
+            sys.modules["task_allocation"],
+            task_allocation
+        )(self.random)
 
         self.running = True
         self.datacollector.collect(self)
 
     def step(self):
+        if len(self.tasks) < self.num_agents * 2 and self.tasks_left > len(self.tasks):
+            self.__add_jobs__(self.num_agents * 2 - len(self.tasks))
+
         self.schedule.step()
-        self.datacollector.collect(self)
-        if self.task_left == 0:
-            self.running = False
+        print("Step")
 
+        starts = []
+        targets = []
+        for agent in self.schedule.agents:
+            starts.append(agent.pos)
+            targets.append(agent.target.pos)
+        # dimension = (self.grid.width, self.grid.height)
+        #
+        # agents = [
+        #     {
+        #         'start': agent.pos,
+        #         'goal': agent.target.pos,
+        #         'name': agent.unique_id
+        #      }
+        #     for agent in self.schedule.agents
+        # ]
+        #
+        # obstacles = [obs.pos for obs in self.obstacles]
+        #
+        # env = Environment(dimension, agents, obstacles)
 
-# class SchellingAgent(Agent):
-#     """
-#     Schelling segregation agent
-#     """
-#
-#     def __init__(self, pos, model, agent_type):
-#         """
-#         Create a new Schelling agent.
-#
-#         Args:
-#            unique_id: Unique identifier for the agent.
-#            x, y: Agent initial location.
-#            agent_type: Indicator for the agent's type (minority=1, majority=0)
-#         """
-#         super().__init__(pos, model)
-#         self.pos = pos
-#         self.type = agent_type
-#
-#     def step(self):
-#         similar = 0
-#         for neighbor in self.model.grid.neighbor_iter(self.pos):
-#             if neighbor.type == self.type:
-#                 similar += 1
-#
-#         # If unhappy, move:
-#         if similar < self.model.homophily:
-#             self.model.grid.move_to_empty(self)
-#         else:
-#             self.model.happy += 1
-#
+        # Searching
+        grid = path_env.Grid(self.obstacle_matrix)
+        paths = cbs(grid, starts, targets)
+        print(paths)
 
-# class Schelling(Model):
-#     """
-#     Model class for the Schelling segregation model.
-#     """
-#
-#     def __init__(self, height=20, width=20, density=0.8, minority_pc=0.2, homophily=3):
-#         """"""
-#
-#         self.height = height
-#         self.width = width
-#         self.density = density
-#         self.minority_pc = minority_pc
-#         self.homophily = homophily
-#
-#         self.schedule = RandomActivation(self)
-#         self.grid = SingleGrid(width, height, torus=True)
-#
-#         self.happy = 0
-#         self.datacollector = DataCollector(
-#             {"happy": "happy"},  # Model-level count of happy agents
-#             # For testing purposes, agent's individual x and y
-#             {"x": lambda a: a.pos[0], "y": lambda a: a.pos[1]},
-#         )
-#
-#         # Set up agents
-#         # We use a grid iterator that returns
-#         # the coordinates of a cell as well as
-#         # its contents. (coord_iter)
-#         for cell in self.grid.coord_iter():
-#             x = cell[1]
-#             y = cell[2]
-#             if self.random.random() < self.density:
-#                 if self.random.random() < self.minority_pc:
-#                     agent_type = 1
-#                 else:
-#                     agent_type = 0
-#
-#                 agent = SchellingAgent((x, y), self, agent_type)
-#                 self.grid.position_agent(agent, (x, y))
-#                 self.schedule.add(agent)
-#
-#         self.running = True
-#         self.datacollector.collect(self)
-#
-#     def step(self):
-#         """
-#         Run one step of the model. If All agents are happy, halt the model.
-#         """
-#         self.happy = 0  # Reset counter of happy agents
-#         self.schedule.step()
-#         # collect data
-#         self.datacollector.collect(self)
-#
-#         if self.happy == self.schedule.get_agent_count():
-#             self.running = False
+        # self.schedule.step()
+        # self.datacollector.collect(self)
+        # if self.task_left == 0:
+        #     self.running = False
+
+    def __set_obstacle__(self):
+        obstacles = []
+        for i, j in zip(*np.where(self.obstacle_matrix == 1)):
+            obs = Obstacle((i, j))
+            obstacles.append(obs)
+            self.grid.place_agent(obs, (i, j))
+        return obstacles
+
+    def __set_up__(self, agents, warehouses, split):
+
+        # Pick empty spots for warehouses
+        conv = convolve2d(self.obstacle_matrix, np.ones((3, 3)), mode="valid")
+        free_indices = np.argwhere(conv == 0)
+        samples = self.random.choices(free_indices, k=warehouses)
+
+        for sample in samples:
+            i, j = sample + 1
+            warehouse = Warehouse((i, j))
+            self.grid.place_agent(warehouse, (i, j))
+
+        # Pick empty spots for agents
+        samples = self.random.choices(list(self.grid.empties), k=agents)
+
+        for a, sample in enumerate(samples):
+            i, j = sample
+            if a < split * agents:
+                # Add Truck agent
+                agent = Truck(a, (i, j), self)
+            else:
+                # Add Car agent
+                agent = Car(a, (i, j), self)
+            self.grid.place_agent(agent, (i, j))
+            self.schedule.add(agent)
+
+    def __add_jobs__(self, jobs):
+        # Set up jobs
+        samples = self.random.choices(list(self.grid.empties), k=jobs)
+
+        for sample in samples:
+            i, j = sample
+            job = Job((i, j), self.random.randint(1, 9), self.random.randint(1, 3))
+            self.tasks.append(job)
+            self.grid.place_agent(job, (i, j))

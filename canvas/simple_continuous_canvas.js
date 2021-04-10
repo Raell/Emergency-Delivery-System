@@ -7,16 +7,16 @@ var ContinuousVisualization = function(height, width, context) {
 		for (var i in objects) {
 			var p = objects[i];
 			if (p.Shape == "rect")
-				this.drawRectangle(p.x, p.y, p.w, p.h, p.Color);
+				this.drawRectangle(p.x, p.y, p.w, p.h, p.obstacle, p.Color);
 			if (p.Shape == "circle")
-				this.drawCircle(p.x, p.y, p.r, p.load, p.Color);
+				this.drawCircle(p.x, p.y, p.r, p.load, p.max, p.Color);
 			if (p.Shape == "triangle")
 				this.drawTriangle(p.x, p.y, p.r, p.val, p.Color);
 		};
 
 	};
 
-	this.drawCircle = function(x, y, radius, load, color) {
+	this.drawCircle = function(x, y, radius, load, max_load, color) {
 		var cx = x * width;
 		var cy = y * height;
 		var r = radius;
@@ -26,15 +26,21 @@ var ContinuousVisualization = function(height, width, context) {
 		context.closePath();
 
 		context.strokeStyle = "#000000";
+		context.lineWidth = 1;
 		context.stroke();
 
 		context.fillStyle = color;
 		context.fill();
 
+		context.fillStyle = "#FFFFFF";
+		context.lineWidth = 0.5;
+		for (let i = 0; i < max_load; i++) {
+			context.strokeRect(cx-r*0.3, cy+r*0.5-(r*i*0.4), r*0.6, r*0.4);
+			context.fillRect(cx-r*0.3, cy+r*0.5-(r*i*0.4), r*0.6, r*0.4);
+		}
 		context.fillStyle = "#a08f73";
 		for (let i = 0; i < load; i++) {
-			context.fillRect(cx-r*0.3, cy+r*0.5-(r*i*0.3), r*0.6, r*0.3);
-			context.strokeRect(cx-r*0.3, cy+r*0.5-(r*i*0.3), r*0.6, r*0.3);
+			context.fillRect(cx - r * 0.3, cy + r * 0.5 - (r * i * 0.4), r * 0.6, r * 0.4);
 		}
 
 	};
@@ -64,24 +70,27 @@ var ContinuousVisualization = function(height, width, context) {
 
 	};
 
-	this.drawRectangle = function(x, y, w, h, color) {
+	this.drawRectangle = function(x, y, w, h, obstacle, color) {
 		context.beginPath();
 		var dx = w;
 		var dy = h;
 
 		// Keep the drawing centered:
-		var x0 = (x*width) - 0.5*dx;
-		var y0 = (y*height) - 0.5*dy;
+		var x0 = (x * width) - 0.5 * dx;
+		var y0 = (y * height) - 0.5 * dy;
 		context.fillStyle = color;
 		context.fillRect(x0, y0, dx, dy);
-		context.strokeStyle = "#000000";
-		context.lineWidth = 2;
-		context.strokeRect(x0, y0, dx, dy);
-		context.fillStyle = "#ffffff";
-		var font_size = w * 0.6;
-		context.font = font_size + "px sans-serif";
-		context.textAlign = "center";
-		context.fillText("W", x*width, y*height + w * 0.22);
+
+		if (!obstacle) {
+			context.strokeStyle = "#000000";
+			context.lineWidth = 0.1;
+			context.strokeRect(x0, y0, dx, dy);
+			context.fillStyle = "#ffffff";
+			var font_size = w * 0.6;
+			context.font = font_size + "px sans-serif";
+			context.textAlign = "center";
+			context.fillText("W", x * width, y * height + w * 0.22);
+		}
 	};
 
 	this.resetCanvas = function() {
