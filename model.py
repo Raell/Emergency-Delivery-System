@@ -1,143 +1,57 @@
-import cProfile
 import sys
-from typing import Tuple, Optional
-from mesa import Model, Agent
-from mesa.time import SimultaneousActivation
-from mesa.space import ContinuousSpace, Grid
-from mesa.datacollection import DataCollector
+from typing import Tuple
+
 import numpy as np
+from mesa import Model, Agent
+from mesa.datacollection import DataCollector
+from mesa.space import MultiGrid
+from mesa.time import RandomActivation
 from scipy.signal import convolve2d
 import task_allocation
-from path_planning.CBS import cbs
-import path_planning.Grid as path_env
+from agents import Car, Truck, Warehouse
+from metrics.metrics import PrioritisedTaskTime
 
 
-def check_collision(pos1, pos2, dist=1):
-    x1, y1 = pos1
-    x2, y2 = pos2
-    return abs(x1 - x2) < dist or abs(y1 - y2) < dist
-
-
-class Car(Agent):
-    def __init__(self,
-                 unique_id: int,
-                 pos: np.ndarray,
-                 # grid_pos: np.ndarray,
-                 model: Model):
-        super().__init__(unique_id, model)
-        self.pos = pos
-        # self.grid_pos = grid_pos
-        self.speed = 0.1
-        self.curr_load = 0
-        self.max_load = 1
-        self.target = None
-
-    def pick_up(self, load):
-        self.curr_load += load
-
-    def drop_off(self, load):
-        self.curr_load -= load
-
-    def step(self):
-        if self.target is None:
-            # Assign target
-            self.target = self.model.task_allocator.allocate_jobs(
-                self.model.tasks
-            )
-
-        # # Move towards target
-        # grad = self.target.pos - self.pos
-        # norm = np.linalg.norm(grad)
-        # if norm > 1:
-        #     grad = grad / np.linalg.norm(grad)
-        #     self.pos += grad * self.speed
-
-
-class Truck(Agent):
-    def __init__(self,
-                 unique_id: int,
-                 pos: np.ndarray,
-                 # grid_pos: np.ndarray,
-                 model: Model):
-        super().__init__(unique_id, model)
-        self.pos = pos
-        # self.grid_pos = grid_pos
-        self.speed = 0.04
-        self.curr_load = 0
-        self.max_load = 3
-        self.target = None
-
-    def pick_up(self, load):
-        self.curr_load += load
-
-    def drop_off(self, load):
-        self.curr_load -= load
-
-    def step(self):
-        if self.target is None:
-            # Assign target
-            self.target = self.model.task_allocator.allocate_jobs(
-                self.model.tasks
-            )
-
-        else:
-            # Move using pathing
-            pass
-
-        # # Move towards target
-        # grad = self.target.pos - self.pos
-        # norm = np.linalg.norm(grad)
-        # if norm > 1:
-        #     grad = grad / np.linalg.norm(grad)
-        #     self.pos += grad * self.speed
-
-
-class Job(Agent):
+class Job:
     def __init__(
             self,
             pos: np.ndarray,
-            # grid_pos: np.ndarray,
             value: int,
-            priority: int
+            priority: int,
+            model: Model
     ):
+        self.name = f"Job {priority}-{pos}"
         self.pos = pos
-        # self.grid_pos = grid_pos
         self.value = value
         self.priority = priority
         self.assigned = []
+        self.model = model
+        self.time_waiting = 0
+        self.is_available = False
 
-    def do_work(self, work):
+    def do_work(self, work, agent):
         self.value -= work
+        self.assigned.remove(agent)
+        return self.value == 0
 
     def assign(self, agent):
         self.assigned.append(agent)
 
     def step(self):
+        if self.is_available:
+            self.time_waiting += 1
         if self.value == 0:
+            self.model.score.process_completed_task(self)
             self.model.tasks_left -= 1
-            self.model.tasks.remove(self)
+            self.model.available_tasks.remove(self)
+            self.model.grid.remove_agent(self)
             for agent in self.assigned:
                 agent.target = None
-
-
-class Warehouse(Agent):
-    def __init__(
-            self,
-            pos: np.ndarray,
-            # grid_pos: np.ndarray,
-    ):
-        self.pos = pos
-        # self.grid_pos = grid_pos
-
-    def step(self):
-        pass
 
 
 class Obstacle(Agent):
     def __init__(self, pos):
         self.pos = pos
-        # self.grid_pos = grid_pos
-        # self.size = size
 
 
 def generate_map(obstacle_map):
@@ -147,6 +61,7 @@ def generate_map(obstacle_map):
         lines = [[0 if c == "." else 1 for c in line] for line in lines]
 
     return np.array(lines, dtype=np.bool)
+
 
 class DeliveryModel(Model):
     """
@@ -163,20 +78,29 @@ class DeliveryModel(Model):
             use_seed=True,
             seed: int = 42,
             obstacle_map: str = "maps/random-32-32-20.map",
-            task_allocation: str = "RandomAllocation"
+            allocation: str = "HungarianMethod",
+            collision=True
     ):
         if use_seed:
             self.random.seed(seed)
         else:
             self.random.seed(None)
         self.space_size = space_size
-        self.tasks = []
         self.tasks_left = jobs
         self.warehouses = []
         self.num_agents = agents
+        self.agents = []
+        self.collision = collision
 
-        self.schedule = SimultaneousActivation(self)
-        self.grid = Grid(space_size, space_size, torus=False)
+        self.allocation_flag = True
+        self.allocator = getattr(
+            sys.modules["task_allocation"],
+            allocation
+        )
+        self.allocation = None
+
+        self.schedule = RandomActivation(self)
+        self.grid = MultiGrid(space_size, space_size, torus=False)
         self.datacollector = DataCollector(
             {"tasks_left": "tasks_left"},
             {"x": lambda a: a.pos[0], "y": lambda a: a.pos[1]},
@@ -184,55 +108,58 @@ class DeliveryModel(Model):
 
         self.obstacle_matrix = generate_map(obstacle_map)
         self.obstacles = self.__set_obstacle__()
-        # self.minkowski_grid = self.__calculate_minkowski__()
         self.__set_up__(agents, warehouses, split)
 
-        self.__add_jobs__(min(2 * agents, jobs))
+        self.hidden_tasks = self.__preload_jobs__()
+        self.available_tasks = self.__add_jobs__(min(2*agents, jobs))
 
-        self.task_allocator = getattr(
-            sys.modules["task_allocation"],
-            task_allocation
-        )(self.random)
+        self.task_allocator = None
+        self.score = PrioritisedTaskTime()
 
         self.running = True
         self.datacollector.collect(self)
 
+    def __preload_jobs__(self):
+        jobs = []
+        samples = self.random.choices(list(self.grid.empties), k=self.tasks_left)
+
+        for sample in samples:
+            i, j = sample
+            job = Job((i, j), self.random.randint(1, 9), self.random.randint(1, 3), self)
+            jobs.append(job)
+        return jobs
+
+    def find_closest_warehouse(self, pos):
+        min_dist = np.inf
+        closest = None
+        for w in self.warehouses:
+            dist = np.sum(np.abs(np.array(w.pos) - np.array(pos)))
+            if dist < min_dist:
+                min_dist = dist
+                closest = w
+        return closest
+
     def step(self):
-        if len(self.tasks) < self.num_agents * 2 and self.tasks_left > len(self.tasks):
-            self.__add_jobs__(self.num_agents * 2 - len(self.tasks))
+        if len(self.available_tasks) < 2*self.num_agents and self.tasks_left > len(self.available_tasks):
+            self.available_tasks += self.__add_jobs__(self.num_agents - len(self.available_tasks))
+
+        if self.allocation_flag:
+            self.allocation_flag = False
+            self.allocation = self.allocator(
+                self.random,
+                self.agents,
+                self.available_tasks
+            ).get_allocation()
 
         self.schedule.step()
-        print("Step")
 
-        starts = []
-        targets = []
-        for agent in self.schedule.agents:
-            starts.append(agent.pos)
-            targets.append(agent.target.pos)
-        # dimension = (self.grid.width, self.grid.height)
-        #
-        # agents = [
-        #     {
-        #         'start': agent.pos,
-        #         'goal': agent.target.pos,
-        #         'name': agent.unique_id
-        #      }
-        #     for agent in self.schedule.agents
-        # ]
-        #
-        # obstacles = [obs.pos for obs in self.obstacles]
-        #
-        # env = Environment(dimension, agents, obstacles)
+        for j in self.available_tasks:
+            j.step()
 
-        # Searching
-        grid = path_env.Grid(self.obstacle_matrix)
-        paths = cbs(grid, starts, targets)
-        print(paths)
-
-        # self.schedule.step()
-        # self.datacollector.collect(self)
-        # if self.task_left == 0:
-        #     self.running = False
+        self.datacollector.collect(self)
+        if self.tasks_left == 0:
+            self.running = False
+            print(self.score.get_score())
 
     def __set_obstacle__(self):
         obstacles = []
@@ -253,6 +180,7 @@ class DeliveryModel(Model):
             i, j = sample + 1
             warehouse = Warehouse((i, j))
             self.grid.place_agent(warehouse, (i, j))
+            self.warehouses.append(warehouse)
 
         # Pick empty spots for agents
         samples = self.random.choices(list(self.grid.empties), k=agents)
@@ -267,13 +195,12 @@ class DeliveryModel(Model):
                 agent = Car(a, (i, j), self)
             self.grid.place_agent(agent, (i, j))
             self.schedule.add(agent)
+            self.agents.append(agent)
 
     def __add_jobs__(self, jobs):
-        # Set up jobs
-        samples = self.random.choices(list(self.grid.empties), k=jobs)
-
-        for sample in samples:
-            i, j = sample
-            job = Job((i, j), self.random.randint(1, 9), self.random.randint(1, 3))
-            self.tasks.append(job)
-            self.grid.place_agent(job, (i, j))
+        new_jobs = self.hidden_tasks[:jobs]
+        self.hidden_tasks = self.hidden_tasks[jobs:]
+        for job in new_jobs:
+            job.is_available = True
+            self.grid.place_agent(job, job.pos)
+        return new_jobs

@@ -1,1 +1,2 @@
 from task_allocation.random_allocation import RandomAllocation
+from task_allocation.hungarian_method import HungarianMethod

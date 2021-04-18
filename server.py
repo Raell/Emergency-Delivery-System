@@ -10,6 +10,7 @@ SPACE_SIZE = 32
 # CANVAS_SIZE = 700
 CANVAS_SIZE = 480
 
+
 def draw(thing):
     """
     Portrayal Method for canvas
@@ -82,12 +83,17 @@ canvas_element = CanvasGrid(draw, SPACE_SIZE, SPACE_SIZE, CANVAS_SIZE, CANVAS_SI
 
 model_params = {
     "space_size": SPACE_SIZE,
-    "jobs": UserSettableParameter("slider", "Total Pooled Jobs", 30, 10, 100, 5),
+    "jobs": UserSettableParameter("slider", "Total Pooled Jobs", 15, 5, 20, 5),
     "agents": UserSettableParameter(
         "slider", "Agents", 5, 1, 10, 1
     ),
     "warehouses": UserSettableParameter("slider", "Warehouses", 1, 1, 3, 1),
     "split": UserSettableParameter("slider", "Proportion of Truck agents", 0.4, 0, 1, 0.1),
+    "allocation": UserSettableParameter("choice",
+                                        "Task Allocation Method",
+                                        "HungarianMethod",
+                                        choices=["HungarianMethod", "RandomAllocation"]
+                                        ),
     "use_seed": UserSettableParameter("checkbox", "Use Random Seed", True),
     "seed": UserSettableParameter("number", "Random Seed", 42)
 }

@@ -108,7 +108,7 @@ class Constraint:
 
 
 def find_conflict(paths):
-    maxlength = max(map(lambda path: len(path) if path is not None else 0, paths))
+    maxlength = min(map(lambda path: len(path) if path is not None else 0, paths))
     last_states = {}
     for t in range(maxlength):
         # Check collisions
