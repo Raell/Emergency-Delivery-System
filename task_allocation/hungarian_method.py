@@ -24,19 +24,6 @@ def generate_matrix(agents, jobs):
             finish_job = 0.8 if agent.curr_load >= job.value else 1
             cost_matrix[i, j] = dist * finish_job * priority_scale[job.priority]
 
-    # col = {
-    #     1: "Red",
-    #     2: "Yellow",
-    #     3: "Green"
-    # }
-    #
-    # print(pd.DataFrame(
-    #     cost_matrix,
-    #     index=[a.name for a in agents],
-    #     columns=[f"{col[j.priority]} {j.value}"
-    #              for j in jobs]
-    # ))
-
     return cost_matrix
 
 

@@ -83,11 +83,11 @@ canvas_element = CanvasGrid(draw, SPACE_SIZE, SPACE_SIZE, CANVAS_SIZE, CANVAS_SI
 
 model_params = {
     "space_size": SPACE_SIZE,
-    "jobs": UserSettableParameter("slider", "Total Pooled Jobs", 15, 5, 20, 5),
+    "jobs": UserSettableParameter("slider", "Total Pooled Jobs", 20, 5, 100, 5),
     "agents": UserSettableParameter(
-        "slider", "Agents", 5, 1, 10, 1
+        "slider", "Agents", 10, 1, 20, 1
     ),
-    "warehouses": UserSettableParameter("slider", "Warehouses", 1, 1, 3, 1),
+    "warehouses": UserSettableParameter("slider", "Warehouses", 2, 1, 3, 1),
     "split": UserSettableParameter("slider", "Proportion of Truck agents", 0.4, 0, 1, 0.1),
     "allocation": UserSettableParameter("choice",
                                         "Task Allocation Method",
@@ -98,9 +98,6 @@ model_params = {
     "seed": UserSettableParameter("number", "Random Seed", 42)
 }
 
-# server = ModularServer(
-#     Schelling, [canvas_element, happy_element, happy_chart], "Schelling", model_params
-# )
 
 server = ModularServer(
     DeliveryModel, [canvas_element], "Emergency Delivery System", model_params

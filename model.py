@@ -111,7 +111,10 @@ class DeliveryModel(Model):
         self.__set_up__(agents, warehouses, split)
 
         self.hidden_tasks = self.__preload_jobs__()
-        self.available_tasks = self.__add_jobs__(min(2*agents, jobs))
+        # self.available_tasks = self.__add_jobs__(min(2*agents, jobs))
+        self.available_tasks = self.__add_jobs__(min(10, jobs))
+
+
 
         self.task_allocator = None
         self.score = PrioritisedTaskTime()
@@ -140,7 +143,8 @@ class DeliveryModel(Model):
         return closest
 
     def step(self):
-        if len(self.available_tasks) < 2*self.num_agents and self.tasks_left > len(self.available_tasks):
+        # if len(self.available_tasks) < 2*self.num_agents and self.tasks_left > len(self.available_tasks):
+        if len(self.available_tasks) < 10 and self.tasks_left > len(self.available_tasks):
             self.available_tasks += self.__add_jobs__(self.num_agents - len(self.available_tasks))
 
         if self.allocation_flag:
@@ -160,6 +164,7 @@ class DeliveryModel(Model):
         if self.tasks_left == 0:
             self.running = False
             print(self.score.get_score())
+            print(self.score.get_avg_wait_time())
 
     def __set_obstacle__(self):
         obstacles = []
