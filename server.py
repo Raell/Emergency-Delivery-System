@@ -78,14 +78,19 @@ def draw(thing):
 
 # happy_element = HappyElement()
 # canvas_element = SimpleCanvas(draw, CANVAS_SIZE, CANVAS_SIZE)
-# happy_chart = ChartModule([{"Label": "happy", "Color": "Black"}])
+chart = ChartModule([{"Label": "Overall Wait Time", "Color": "Black"}])
+avg_wait = ChartModule([
+    {"Label": "High", "Color": "Red"},
+    {"Label": "Med", "Color": "Yellow"},
+    {"Label": "Low", "Color": "Green"},
+])
 canvas_element = CanvasGrid(draw, SPACE_SIZE, SPACE_SIZE, CANVAS_SIZE, CANVAS_SIZE)
 
 model_params = {
     "space_size": SPACE_SIZE,
     "jobs": UserSettableParameter("slider", "Total Pooled Jobs", 20, 5, 100, 5),
     "agents": UserSettableParameter(
-        "slider", "Agents", 10, 1, 20, 1
+        "slider", "Agents", 5, 1, 20, 1
     ),
     "warehouses": UserSettableParameter("slider", "Warehouses", 2, 1, 3, 1),
     "split": UserSettableParameter("slider", "Proportion of Truck agents", 0.4, 0, 1, 0.1),
@@ -100,5 +105,5 @@ model_params = {
 
 
 server = ModularServer(
-    DeliveryModel, [canvas_element], "Emergency Delivery System", model_params
+    DeliveryModel, [canvas_element, chart, avg_wait], "Emergency Delivery System", model_params
 )

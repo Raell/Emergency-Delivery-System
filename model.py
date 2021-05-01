@@ -79,7 +79,7 @@ class DeliveryModel(Model):
             seed: int = 42,
             obstacle_map: str = "maps/random-32-32-20.map",
             allocation: str = "HungarianMethod",
-            collision=True
+            collision=False
     ):
         if use_seed:
             self.random.seed(seed)
@@ -101,10 +101,6 @@ class DeliveryModel(Model):
 
         self.schedule = RandomActivation(self)
         self.grid = MultiGrid(space_size, space_size, torus=False)
-        self.datacollector = DataCollector(
-            {"tasks_left": "tasks_left"},
-            {"x": lambda a: a.pos[0], "y": lambda a: a.pos[1]},
-        )
 
         self.obstacle_matrix = generate_map(obstacle_map)
         self.obstacles = self.__set_obstacle__()
@@ -118,6 +114,17 @@ class DeliveryModel(Model):
 
         self.task_allocator = None
         self.score = PrioritisedTaskTime()
+
+        self.datacollector = DataCollector(
+            {
+                "tasks_left": "tasks_left",
+                "Overall Wait Time": lambda m: m.score.get_score(),
+                "High": lambda m: m.score.get_avg_wait_time().get(1),
+                "Med": lambda m: m.score.get_avg_wait_time().get(2),
+                "Low": lambda m: m.score.get_avg_wait_time().get(3),
+             },
+            {"x": lambda a: a.pos[0], "y": lambda a: a.pos[1]},
+        )
 
         self.running = True
         self.datacollector.collect(self)
